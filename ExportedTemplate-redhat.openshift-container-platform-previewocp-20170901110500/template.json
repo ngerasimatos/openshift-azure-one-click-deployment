@@ -1,0 +1,1578 @@
+{
+    "$schema": "http://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "baseUrl": {
+            "defaultValue": "https://gallery.azure.com/artifact/20151001/redhat.openshift-container-platform-previewocp.1.0.9/Artifacts",
+            "type": "String",
+            "metadata": {
+                "description": "Base URL for Marketplace Deployment",
+                "artifactsBaseUrl": ""
+            }
+        },
+        "openshiftClusterPrefix": {
+            "defaultValue": "mycluster",
+            "minLength": 1,
+            "maxLength": 20,
+            "type": "String",
+            "metadata": {
+                "description": "OpenShift cluster prefix.  Used to generate master, infra and node hostnames.  Maximum of 20 characters."
+            }
+        },
+        "adminUsername": {
+            "defaultValue": "ocpadmin",
+            "minLength": 1,
+            "type": "String",
+            "metadata": {
+                "description": "Administrator username on all VMs and first user created for OpenShift login"
+            }
+        },
+        "clusterSize": {
+            "defaultValue": "medium",
+            "allowedValues": [
+                "small",
+                "medium",
+                "large"
+            ],
+            "minLength": 1,
+            "type": "String",
+            "metadata": {
+                "description": "Administrator username on all VMs and first user created for OpenShift login"
+            }
+        },
+        "openshiftPassword": {
+            "minLength": 1,
+            "type": "SecureString",
+            "metadata": {
+                "description": "Password for OpenShift user to login to OpenShift Console"
+            }
+        },
+        "rhsmUsername": {
+            "minLength": 1,
+            "type": "String",
+            "metadata": {
+                "description": "Red Hat Subscription Manager Username or Organization ID. If usernamepassword selected in previous input, then use Username; otherwise entier Organization ID. To find your Organization ID, run on registered server: subscription-manager identity"
+            }
+        },
+        "rhsmPassword": {
+            "minLength": 1,
+            "type": "SecureString",
+            "metadata": {
+                "description": "Red Hat Subscription Manager Password or Activation Key. To find or create your Activation Key, go to: https://access.redhat.com/management/activation_keys"
+            }
+        },
+        "rhsmPoolId": {
+            "minLength": 1,
+            "type": "String",
+            "metadata": {
+                "description": "Red Hat Subscription Manager Pool ID with OpenShift entitlements. To find it, run on registered server: subscription-manager list"
+            }
+        },
+        "sshPublicKey": {
+            "type": "SecureString",
+            "metadata": {
+                "description": "SSH public key for all VMs"
+            }
+        },
+        "keyVaultResourceGroup": {
+            "minLength": 1,
+            "type": "String",
+            "metadata": {
+                "description": "Resource Group that contains the Key Vault"
+            }
+        },
+        "keyVaultName": {
+            "minLength": 1,
+            "type": "String",
+            "metadata": {
+                "description": "Name of the Key Vault"
+            }
+        },
+        "keyVaultSecret": {
+            "minLength": 1,
+            "type": "String",
+            "metadata": {
+                "description": "Key Vault Secret Name that contains the Private Key"
+            }
+        },
+        "enableAzure": {
+            "defaultValue": "false",
+            "allowedValues": [
+                "true",
+                "false"
+            ],
+            "minLength": 1,
+            "type": "String",
+            "metadata": {
+                "description": "Enable Azure as Cloud Provider - true or false"
+            }
+        },
+        "aadClientId": {
+            "defaultValue": "changeme",
+            "minLength": 1,
+            "type": "String",
+            "metadata": {
+                "description": "Azure AD Client ID"
+            }
+        },
+        "aadClientSecret": {
+            "defaultValue": "changeme",
+            "minLength": 1,
+            "type": "SecureString",
+            "metadata": {
+                "description": "Azure AD Client Secret"
+            }
+        },
+        "defaultSubDomainType": {
+            "defaultValue": "xipio",
+            "allowedValues": [
+                "xipio",
+                "custom"
+            ],
+            "type": "String",
+            "metadata": {
+                "description": "Default Subdomain type - xip.io or custom (defined in next parameter)"
+            }
+        },
+        "defaultSubDomain": {
+            "defaultValue": "contoso.com",
+            "type": "String",
+            "metadata": {
+                "description": "Default Subdomain for application routing (Wildcard DNS) - must enter something even if you are using xip.io. Must be all lowercase"
+            }
+        }
+    },
+    "variables": {
+        "location": "[resourceGroup().location]",
+        "resourceGroupName": "[resourceGroup().id]",
+        "apiVersionCompute": "2017-03-30",
+        "apiVersionNetwork": "2016-03-30",
+        "apiVersionStorage": "2015-06-15",
+        "apiVersionLinkTemplate": "2015-01-01",
+        "defaultSubDomain": "[toLower(parameters('defaultSubDomain'))]",
+        "namingInfix": "[toLower(parameters('openshiftClusterPrefix'))]",
+        "openshiftBastionHostname": "[concat(variables('namingInfix'), '-bastion')]",
+        "openshiftMasterHostname": "[concat(variables('namingInfix'), '-master')]",
+        "openshiftNodeHostname": "[concat(variables('namingInfix'), '-node')]",
+        "openshiftInfraHostname": "[concat(variables('namingInfix'), '-infra')]",
+        "newStorageAccountBastion": "[concat('master', uniqueString(concat(resourceGroup().id, 'bsa')))]",
+        "newStorageAccountMaster": "[concat('master', uniqueString(concat(resourceGroup().id, 'msa')))]",
+        "newStorageAccountInfra": "[concat('infra', uniqueString(concat(resourceGroup().id, 'isa')))]",
+        "newStorageAccountNode": "[concat('nodeos', uniqueString(concat(resourceGroup().id, 'nsa')))]",
+        "diagStorageAccount": "[concat('diag', uniqueString(concat(resourceGroup().id, 'dsa')))]",
+        "newStorageAccountRegistry": "[concat('registry', uniqueString(concat(resourceGroup().id, 'registry')))]",
+        "newStorageAccountPersistentVolume1": "[concat('pv1sa', uniqueString(concat(resourceGroup().id, 'persistentvolume1')))]",
+        "addressPrefix": "10.0.0.0/8",
+        "masterSubnetPrefix": "10.1.0.0/16",
+        "nodeSubnetPrefix": "10.2.0.0/16",
+        "virtualNetworkName": "openshiftvnet",
+        "masterSubnetName": "mastersubnet",
+        "nodeSubnetName": "nodesubnet",
+        "infraLbPublicIpDnsLabel": "[concat('infradns', uniqueString(concat(resourceGroup().id, 'infra')))]",
+        "openshiftMasterPublicIpDnsLabel": "[concat('masterdns', uniqueString(concat(resourceGroup().id, 'master')))]",
+        "bastionPublicIp": "bastionpublicip",
+        "bastionPublicIpDnsLabel": "[concat('bastiondns', uniqueString(resourceGroup().id))]",
+        "persistentVolume1Type": "Standard_LRS",
+        "persistentVolume2Type": "Standard_LRS",
+        "masterLoadBalancerName": "[concat(variables('openshiftMasterHostname'), 'lb')]",
+        "masterPublicIpAddressId": "[resourceId('Microsoft.Network/publicIPAddresses', variables('openshiftMasterPublicIpDnsLabel'))]",
+        "masterLbId": "[resourceId('Microsoft.Network/loadBalancers', variables('masterLoadBalancerName'))]",
+        "masterLbFrontEndConfigId": "[concat(variables('masterLbId'), '/frontendIPConfigurations/loadBalancerFrontEnd')]",
+        "masterLbBackendPoolId": "[concat(variables('masterLbId'),'/backendAddressPools/loadBalancerBackend')]",
+        "masterLbHttpProbeId": "[concat(variables('masterLbId'),'/probes/httpProbe')]",
+        "masterLb8443ProbeId": "[concat(variables('masterLbId'),'/probes/8443Probe')]",
+        "masterLbCockpitProbeId": "[concat(variables('masterLbId'),'/probes/cockpitProbe')]",
+        "infraLoadBalancerName": "[concat(variables('openshiftInfraHostname'), 'lb')]",
+        "infraPublicIpAddressId": "[resourceId('Microsoft.Network/publicIPAddresses', variables('infraLbPublicIpDnsLabel'))]",
+        "infraLbId": "[resourceId('Microsoft.Network/loadBalancers', variables('infraLoadBalancerName'))]",
+        "infraLbFrontEndConfigId": "[concat(variables('infraLbId'), '/frontendIPConfigurations/loadBalancerFrontEnd')]",
+        "infraLbBackendPoolId": "[concat(variables('infraLbId'),'/backendAddressPools/loadBalancerBackend')]",
+        "infraLbHttpProbeId": "[concat(variables('infraLbId'),'/probes/httpProbe')]",
+        "infraLbHttpsProbeId": "[concat(variables('infraLbId'),'/probes/httpsProbe')]",
+        "infraLbCockpitProbeId": "[concat(variables('infraLbId'),'/probes/cockpitProbe')]",
+        "redHatTags": {
+            "app": "OpenShift",
+            "provider": "9d2c71fc-96ba-4b4a-93b3-14def5bc96fc"
+        },
+        "bastionVmSize": "Standard_DS2_v2",
+        "masterVmSize": "[variables('clusterSizeMap')[parameters('clusterSize')].masterVmSize]",
+        "masterInstanceCount": "[variables('clusterSizeMap')[parameters('clusterSize')].masterVmCount]",
+        "infraVmSize": "[variables('clusterSizeMap')[parameters('clusterSize')].infraVmSize]",
+        "infraInstanceCount": "[variables('clusterSizeMap')[parameters('clusterSize')].infraVmCount]",
+        "nodeVmSize": "[variables('clusterSizeMap')[parameters('clusterSize')].nodeVmSize]",
+        "nodeInstanceCount": "[variables('clusterSizeMap')[parameters('clusterSize')].nodeVmCount]",
+        "dataDiskSize": "[variables('clusterSizeMap')[parameters('clusterSize')].dataDiskSize]",
+        "clusterSizeMap": {
+            "small": {
+                "masterVmSize": "Standard_DS2_v2",
+                "masterVmCount": 1,
+                "infraVmSize": "Standard_DS2_v2",
+                "infraVmCount": 1,
+                "nodeVmSize": "Standard_DS2_v2",
+                "nodeVmCount": 2,
+                "dataDiskSize": 128
+            },
+            "medium": {
+                "masterVmSize": "Standard_DS3_v2",
+                "masterVmCount": 3,
+                "infraVmSize": "Standard_DS3_v2",
+                "infraVmCount": 2,
+                "nodeVmSize": "Standard_DS3_v2",
+                "nodeVmCount": 4,
+                "dataDiskSize": 256
+            },
+            "large": {
+                "masterVmSize": "Standard_DS3_v2",
+                "masterVmCount": 3,
+                "infraVmSize": "Standard_DS3_v2",
+                "infraVmCount": 2,
+                "nodeVmSize": "Standard_DS4_v2",
+                "nodeVmCount": 6,
+                "dataDiskSize": 512
+            }
+        },
+        "osType": {
+            "publisher": "redhat",
+            "offer": "rhel-byol",
+            "sku": "rhel74",
+            "version": "latest"
+        },
+        "plan": {
+            "publisher": "redhat",
+            "product": "rhel-byol",
+            "name": "rhel74"
+        },
+        "singlequote": "'",
+        "sshKeyPath": "[concat('/home/', parameters('adminUsername'), '/.ssh/authorized_keys')]",
+        "bastionPrepScriptUrl": "[concat(parameters('baseUrl'), '/scripts/bastionPrep.sh')]",
+        "nodePrepScriptUrl": "[concat(parameters('baseUrl'), '/scripts/nodePrep.sh')]",
+        "masterPrepScriptUrl": "[concat(parameters('baseUrl'), '/scripts/masterPrep.sh')]",
+        "bastionPrepScriptFileName": "bastionPrep.sh",
+        "nodePrepScriptFileName": "nodePrep.sh",
+        "masterPrepScriptFileName": "masterPrep.sh",
+        "clusterNodeDeploymentTemplateUrl": "[concat(parameters('baseUrl'), '/nested/galleryclusternode.json')]",
+        "basicDeploymentTemplateUrl": "[concat(parameters('baseUrl'), '/nested/gallerybasic.json')]",
+        "openshiftDeploymentTemplateUrl": "[concat(parameters('baseUrl'), '/nested/openshiftdeploy.json')]"
+    },
+    "resources": [
+        {
+            "type": "Microsoft.Network/networkSecurityGroups",
+            "name": "[concat(variables('openshiftBastionHostname'), '-nsg')]",
+            "apiVersion": "[variables('apiVersionNetwork')]",
+            "location": "[variables('location')]",
+            "tags": {
+                "displayName": "BastionNSG",
+                "provider": "[variables('redHatTags').provider]",
+                "app": "[variables('redHatTags').app]"
+            },
+            "properties": {
+                "securityRules": [
+                    {
+                        "name": "allowSSHin_all",
+                        "properties": {
+                            "description": "Allow SSH in from all locations",
+                            "protocol": "Tcp",
+                            "sourcePortRange": "*",
+                            "destinationPortRange": "22",
+                            "sourceAddressPrefix": "*",
+                            "destinationAddressPrefix": "*",
+                            "access": "Allow",
+                            "priority": 100,
+                            "direction": "Inbound"
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "type": "Microsoft.Network/networkSecurityGroups",
+            "name": "[concat(variables('openshiftMasterHostname'), '-nsg')]",
+            "apiVersion": "[variables('apiVersionNetwork')]",
+            "location": "[variables('location')]",
+            "tags": {
+                "displayName": "MasterNSG",
+                "provider": "[variables('redHatTags').provider]",
+                "app": "[variables('redHatTags').app]"
+            },
+            "properties": {
+                "securityRules": [
+                    {
+                        "name": "allowSSHin_all",
+                        "properties": {
+                            "description": "Allow SSH in from all locations",
+                            "protocol": "Tcp",
+                            "sourcePortRange": "*",
+                            "destinationPortRange": "22",
+                            "sourceAddressPrefix": "*",
+                            "destinationAddressPrefix": "*",
+                            "access": "Allow",
+                            "priority": 100,
+                            "direction": "Inbound"
+                        }
+                    },
+                    {
+                        "name": "allowHTTPS_all",
+                        "properties": {
+                            "description": "Allow HTTPS connections from all locations",
+                            "protocol": "Tcp",
+                            "sourcePortRange": "*",
+                            "destinationPortRange": "443",
+                            "sourceAddressPrefix": "*",
+                            "destinationAddressPrefix": "*",
+                            "access": "Allow",
+                            "priority": 200,
+                            "direction": "Inbound"
+                        }
+                    },
+                    {
+                        "name": "allowOpenShiftConsoleIn_all",
+                        "properties": {
+                            "description": "Allow OpenShift Console connections from all locations",
+                            "protocol": "Tcp",
+                            "sourcePortRange": "*",
+                            "destinationPortRange": "8443",
+                            "sourceAddressPrefix": "*",
+                            "destinationAddressPrefix": "*",
+                            "access": "Allow",
+                            "priority": 300,
+                            "direction": "Inbound"
+                        }
+                    },
+                    {
+                        "name": "allowCockpitIn_all",
+                        "properties": {
+                            "description": "Allow Cockpit connections from all locations",
+                            "protocol": "Tcp",
+                            "sourcePortRange": "*",
+                            "destinationPortRange": "9090",
+                            "sourceAddressPrefix": "*",
+                            "destinationAddressPrefix": "*",
+                            "access": "Allow",
+                            "priority": 400,
+                            "direction": "Inbound"
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "type": "Microsoft.Network/networkSecurityGroups",
+            "name": "[concat(variables('openshiftInfraHostname'), '-nsg')]",
+            "apiVersion": "[variables('apiVersionNetwork')]",
+            "location": "[variables('location')]",
+            "tags": {
+                "displayName": "InfraNSG",
+                "provider": "[variables('redHatTags').provider]",
+                "app": "[variables('redHatTags').app]"
+            },
+            "properties": {
+                "securityRules": [
+                    {
+                        "name": "allowSSHin_all",
+                        "properties": {
+                            "description": "Allow SSH in from all locations",
+                            "protocol": "Tcp",
+                            "sourcePortRange": "*",
+                            "destinationPortRange": "22",
+                            "sourceAddressPrefix": "*",
+                            "destinationAddressPrefix": "*",
+                            "access": "Allow",
+                            "priority": 100,
+                            "direction": "Inbound"
+                        }
+                    },
+                    {
+                        "name": "allowHTTPSIn_all",
+                        "properties": {
+                            "description": "Allow HTTPS connections from all locations",
+                            "protocol": "Tcp",
+                            "sourcePortRange": "*",
+                            "destinationPortRange": "443",
+                            "sourceAddressPrefix": "*",
+                            "destinationAddressPrefix": "*",
+                            "access": "Allow",
+                            "priority": 200,
+                            "direction": "Inbound"
+                        }
+                    },
+                    {
+                        "name": "allowHTTPIn_all",
+                        "properties": {
+                            "description": "Allow HTTP connections from all locations",
+                            "protocol": "Tcp",
+                            "sourcePortRange": "*",
+                            "destinationPortRange": "80",
+                            "sourceAddressPrefix": "*",
+                            "destinationAddressPrefix": "*",
+                            "access": "Allow",
+                            "priority": 300,
+                            "direction": "Inbound"
+                        }
+                    },
+                    {
+                        "name": "allowCockpitIn_all",
+                        "properties": {
+                            "description": "Allow Cockpit connections from all locations",
+                            "protocol": "Tcp",
+                            "sourcePortRange": "*",
+                            "destinationPortRange": "9090",
+                            "sourceAddressPrefix": "*",
+                            "destinationAddressPrefix": "*",
+                            "access": "Allow",
+                            "priority": 400,
+                            "direction": "Inbound"
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "type": "Microsoft.Network/networkSecurityGroups",
+            "name": "[concat(variables('openshiftNodeHostname'), '-nsg')]",
+            "apiVersion": "[variables('apiVersionNetwork')]",
+            "location": "[variables('location')]",
+            "tags": {
+                "displayName": "NodeNSG",
+                "provider": "[variables('redHatTags').provider]",
+                "app": "[variables('redHatTags').app]"
+            },
+            "properties": {
+                "securityRules": [
+                    {
+                        "name": "allowSSHin_all",
+                        "properties": {
+                            "description": "Allow SSH in from all locations",
+                            "protocol": "Tcp",
+                            "sourcePortRange": "*",
+                            "destinationPortRange": "22",
+                            "sourceAddressPrefix": "*",
+                            "destinationAddressPrefix": "*",
+                            "access": "Allow",
+                            "priority": 100,
+                            "direction": "Inbound"
+                        }
+                    },
+                    {
+                        "name": "allowHTTPS_all",
+                        "properties": {
+                            "description": "Allow HTTPS connections from all locations",
+                            "protocol": "Tcp",
+                            "sourcePortRange": "*",
+                            "destinationPortRange": "443",
+                            "sourceAddressPrefix": "*",
+                            "destinationAddressPrefix": "*",
+                            "access": "Allow",
+                            "priority": 200,
+                            "direction": "Inbound"
+                        }
+                    },
+                    {
+                        "name": "allowHTTPIn_all",
+                        "properties": {
+                            "description": "Allow HTTP connections from all locations",
+                            "protocol": "Tcp",
+                            "sourcePortRange": "*",
+                            "destinationPortRange": "80",
+                            "sourceAddressPrefix": "*",
+                            "destinationAddressPrefix": "*",
+                            "access": "Allow",
+                            "priority": 300,
+                            "direction": "Inbound"
+                        }
+                    },
+                    {
+                        "name": "allowCockpitIn_all",
+                        "properties": {
+                            "description": "Allow Cockpit connections from all locations",
+                            "protocol": "Tcp",
+                            "sourcePortRange": "*",
+                            "destinationPortRange": "9090",
+                            "sourceAddressPrefix": "*",
+                            "destinationAddressPrefix": "*",
+                            "access": "Allow",
+                            "priority": 400,
+                            "direction": "Inbound"
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "type": "Microsoft.Network/virtualNetworks",
+            "name": "[variables('virtualNetworkName')]",
+            "apiVersion": "[variables('apiVersionNetwork')]",
+            "location": "[variables('location')]",
+            "tags": {
+                "displayName": "VirtualNetwork"
+            },
+            "properties": {
+                "addressSpace": {
+                    "addressPrefixes": [
+                        "[variables('addressPrefix')]"
+                    ]
+                },
+                "subnets": [
+                    {
+                        "name": "[variables('masterSubnetName')]",
+                        "properties": {
+                            "addressPrefix": "[variables('masterSubnetPrefix')]"
+                        }
+                    },
+                    {
+                        "name": "[variables('nodeSubnetName')]",
+                        "properties": {
+                            "addressPrefix": "[variables('nodeSubnetPrefix')]"
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "type": "Microsoft.Storage/storageAccounts",
+            "name": "[variables('newStorageAccountBastion')]",
+            "apiVersion": "[variables('apiVersionStorage')]",
+            "location": "[variables('location')]",
+            "tags": {
+                "displayName": "DiagnosticsStorageAccount",
+                "provider": "[variables('redHatTags').provider]",
+                "app": "[variables('redHatTags').app]"
+            },
+            "properties": {
+                "accountType": "Premium_LRS"
+            }
+        },
+        {
+            "type": "Microsoft.Storage/storageAccounts",
+            "name": "[variables('newStorageAccountMaster')]",
+            "apiVersion": "[variables('apiVersionStorage')]",
+            "location": "[variables('location')]",
+            "tags": {
+                "displayName": "DiagnosticsStorageAccount",
+                "provider": "[variables('redHatTags').provider]",
+                "app": "[variables('redHatTags').app]"
+            },
+            "properties": {
+                "accountType": "Premium_LRS"
+            }
+        },
+        {
+            "type": "Microsoft.Storage/storageAccounts",
+            "name": "[variables('newStorageAccountInfra')]",
+            "apiVersion": "[variables('apiVersionStorage')]",
+            "location": "[variables('location')]",
+            "tags": {
+                "displayName": "DiagnosticsStorageAccount",
+                "provider": "[variables('redHatTags').provider]",
+                "app": "[variables('redHatTags').app]"
+            },
+            "properties": {
+                "accountType": "Premium_LRS"
+            }
+        },
+        {
+            "type": "Microsoft.Storage/storageAccounts",
+            "name": "[variables('newStorageAccountNode')]",
+            "apiVersion": "[variables('apiVersionStorage')]",
+            "location": "[variables('location')]",
+            "tags": {
+                "displayName": "DiagnosticsStorageAccount",
+                "provider": "[variables('redHatTags').provider]",
+                "app": "[variables('redHatTags').app]"
+            },
+            "properties": {
+                "accountType": "Premium_LRS"
+            }
+        },
+        {
+            "type": "Microsoft.Storage/storageAccounts",
+            "name": "[variables('diagStorageAccount')]",
+            "apiVersion": "[variables('apiVersionStorage')]",
+            "location": "[variables('location')]",
+            "tags": {
+                "displayName": "DiagnosticsStorageAccount",
+                "provider": "[variables('redHatTags').provider]",
+                "app": "[variables('redHatTags').app]"
+            },
+            "properties": {
+                "accountType": "Standard_LRS"
+            }
+        },
+        {
+            "type": "Microsoft.Storage/storageAccounts",
+            "name": "[variables('newStorageAccountRegistry')]",
+            "apiVersion": "[variables('apiVersionStorage')]",
+            "location": "[variables('location')]",
+            "tags": {
+                "displayName": "RegistryStorageAccount",
+                "provider": "[variables('redHatTags').provider]",
+                "app": "[variables('redHatTags').app]"
+            },
+            "properties": {
+                "accountType": "Standard_LRS"
+            }
+        },
+        {
+            "type": "Microsoft.Storage/storageAccounts",
+            "name": "[variables('newStorageAccountPersistentVolume1')]",
+            "apiVersion": "[variables('apiVersionStorage')]",
+            "location": "[variables('location')]",
+            "tags": {
+                "displayName": "PersistentVolume1StorageAccount",
+                "provider": "[variables('redHatTags').provider]",
+                "app": "[variables('redHatTags').app]"
+            },
+            "properties": {
+                "accountType": "[variables('persistentVolume1Type')]"
+            }
+        },
+        {
+            "type": "Microsoft.Network/publicIPAddresses",
+            "name": "[variables('bastionPublicIp')]",
+            "apiVersion": "[variables('apiVersionNetwork')]",
+            "location": "[variables('location')]",
+            "tags": {
+                "displayName": "BastionPublicIP",
+                "provider": "[variables('redHatTags').provider]",
+                "app": "[variables('redHatTags').app]"
+            },
+            "properties": {
+                "publicIPAllocationMethod": "Dynamic",
+                "dnsSettings": {
+                    "domainNameLabel": "[variables('bastionPublicIpDnsLabel')]"
+                }
+            }
+        },
+        {
+            "type": "Microsoft.Network/publicIPAddresses",
+            "name": "[variables('infraLbPublicIpDnsLabel')]",
+            "apiVersion": "[variables('apiVersionNetwork')]",
+            "location": "[variables('location')]",
+            "tags": {
+                "displayName": "InfraLBPublicIP",
+                "provider": "[variables('redHatTags').provider]",
+                "app": "[variables('redHatTags').app]"
+            },
+            "properties": {
+                "publicIPAllocationMethod": "Static",
+                "dnsSettings": {
+                    "domainNameLabel": "[variables('infraLbPublicIpDnsLabel')]"
+                }
+            }
+        },
+        {
+            "type": "Microsoft.Network/publicIPAddresses",
+            "name": "[variables('openshiftMasterPublicIpDnsLabel')]",
+            "apiVersion": "[variables('apiVersionNetwork')]",
+            "location": "[variables('location')]",
+            "tags": {
+                "displayName": "MasterPublicIP",
+                "provider": "[variables('redHatTags').provider]",
+                "app": "[variables('redHatTags').app]"
+            },
+            "properties": {
+                "publicIPAllocationMethod": "Static",
+                "dnsSettings": {
+                    "domainNameLabel": "[variables('openshiftMasterPublicIpDnsLabel')]"
+                }
+            }
+        },
+        {
+            "type": "Microsoft.Compute/availabilitySets",
+            "name": "masteravailabilityset",
+            "apiVersion": "[variables('apiVersionCompute')]",
+            "location": "[variables('location')]",
+            "tags": {
+                "displayName": "MasterAvailabilitySet",
+                "provider": "[variables('redHatTags').provider]",
+                "app": "[variables('redHatTags').app]"
+            }
+        },
+        {
+            "type": "Microsoft.Compute/availabilitySets",
+            "name": "infraavailabilityset",
+            "apiVersion": "[variables('apiVersionCompute')]",
+            "location": "[variables('location')]",
+            "tags": {
+                "displayName": "InfraAvailabilitySet",
+                "provider": "[variables('redHatTags').provider]",
+                "app": "[variables('redHatTags').app]"
+            }
+        },
+        {
+            "type": "Microsoft.Compute/availabilitySets",
+            "name": "nodeavailabilityset",
+            "apiVersion": "[variables('apiVersionCompute')]",
+            "location": "[variables('location')]",
+            "tags": {
+                "displayName": "NodeAvailabilitySet",
+                "provider": "[variables('redHatTags').provider]",
+                "app": "[variables('redHatTags').app]"
+            }
+        },
+        {
+            "type": "Microsoft.Network/loadBalancers",
+            "name": "[variables('masterLoadBalancerName')]",
+            "apiVersion": "[variables('apiVersionNetwork')]",
+            "location": "[variables('location')]",
+            "tags": {
+                "displayName": "MasterLB",
+                "provider": "[variables('redHatTags').provider]",
+                "app": "[variables('redHatTags').app]"
+            },
+            "properties": {
+                "frontendIPConfigurations": [
+                    {
+                        "name": "LoadBalancerFrontEnd",
+                        "properties": {
+                            "publicIPAddress": {
+                                "id": "[variables('masterPublicIpAddressId')]"
+                            }
+                        }
+                    }
+                ],
+                "backendAddressPools": [
+                    {
+                        "name": "loadBalancerBackEnd"
+                    }
+                ],
+                "loadBalancingRules": [
+                    {
+                        "name": "OpenShiftAdminConsole",
+                        "properties": {
+                            "frontendIPConfiguration": {
+                                "id": "[variables('masterLbFrontEndConfigId')]"
+                            },
+                            "backendAddressPool": {
+                                "id": "[variables('masterLbBackendPoolId')]"
+                            },
+                            "protocol": "Tcp",
+                            "loadDistribution": "SourceIP",
+                            "idleTimeoutInMinutes": 30,
+                            "frontendPort": 8443,
+                            "backendPort": 8443,
+                            "probe": {
+                                "id": "[variables('masterLb8443ProbeId')]"
+                            }
+                        }
+                    },
+                    {
+                        "name": "CockpitConsole",
+                        "properties": {
+                            "frontendIPConfiguration": {
+                                "id": "[variables('masterLbFrontEndConfigId')]"
+                            },
+                            "backendAddressPool": {
+                                "id": "[variables('masterLbBackendPoolId')]"
+                            },
+                            "protocol": "Tcp",
+                            "loadDistribution": "SourceIP",
+                            "idleTimeoutInMinutes": 30,
+                            "frontendPort": 9090,
+                            "backendPort": 9090,
+                            "probe": {
+                                "id": "[variables('masterLbCockpitProbeId')]"
+                            }
+                        }
+                    }
+                ],
+                "probes": [
+                    {
+                        "name": "8443Probe",
+                        "properties": {
+                            "protocol": "Tcp",
+                            "port": 8443,
+                            "intervalInSeconds": 5,
+                            "numberOfProbes": 2
+                        }
+                    },
+                    {
+                        "name": "cockpitProbe",
+                        "properties": {
+                            "protocol": "Tcp",
+                            "port": 9090,
+                            "intervalInSeconds": 5,
+                            "numberOfProbes": 2
+                        }
+                    }
+                ]
+            },
+            "dependsOn": [
+                "[concat('Microsoft.Network/publicIPAddresses/', variables('openshiftMasterPublicIpDnsLabel'))]"
+            ]
+        },
+        {
+            "type": "Microsoft.Network/loadBalancers/inboundNatRules",
+            "name": "[concat(variables('masterLoadBalancerName'), '/', 'SSH-', variables('openshiftMasterHostname'), copyIndex())]",
+            "apiVersion": "[variables('apiVersionNetwork')]",
+            "location": "[variables('location')]",
+            "copy": {
+                "name": "masterLbLoop",
+                "count": "[variables('masterInstanceCount')]",
+                "mode": "serial",
+                "batchSize": 1
+            },
+            "properties": {
+                "frontendIPConfiguration": {
+                    "id": "[variables('masterLbFrontEndConfigId')]"
+                },
+                "protocol": "tcp",
+                "frontendPort": "[copyIndex(2200)]",
+                "backendPort": 22,
+                "enableFloatingIP": false
+            },
+            "dependsOn": [
+                "[variables('masterLbId')]"
+            ]
+        },
+        {
+            "type": "Microsoft.Network/loadBalancers",
+            "name": "[variables('infraLoadBalancerName')]",
+            "apiVersion": "[variables('apiVersionNetwork')]",
+            "location": "[variables('location')]",
+            "tags": {
+                "displayName": "InfraLB",
+                "provider": "[variables('redHatTags').provider]",
+                "app": "[variables('redHatTags').app]"
+            },
+            "properties": {
+                "frontendIPConfigurations": [
+                    {
+                        "name": "LoadBalancerFrontEnd",
+                        "properties": {
+                            "publicIPAddress": {
+                                "id": "[variables('infraPublicIpAddressId')]"
+                            }
+                        }
+                    }
+                ],
+                "backendAddressPools": [
+                    {
+                        "name": "loadBalancerBackEnd"
+                    }
+                ],
+                "loadBalancingRules": [
+                    {
+                        "name": "OpenShiftRouterHTTP",
+                        "properties": {
+                            "frontendIPConfiguration": {
+                                "id": "[variables('infraLbFrontEndConfigId')]"
+                            },
+                            "backendAddressPool": {
+                                "id": "[variables('infraLbBackendPoolId')]"
+                            },
+                            "protocol": "Tcp",
+                            "frontendPort": 80,
+                            "backendPort": 80,
+                            "probe": {
+                                "id": "[variables('infraLbHttpProbeId')]"
+                            }
+                        }
+                    },
+                    {
+                        "name": "OpenShiftRouterHTTPS",
+                        "properties": {
+                            "frontendIPConfiguration": {
+                                "id": "[variables('infraLbFrontEndConfigId')]"
+                            },
+                            "backendAddressPool": {
+                                "id": "[variables('infraLbBackendPoolId')]"
+                            },
+                            "protocol": "Tcp",
+                            "frontendPort": 443,
+                            "backendPort": 443,
+                            "probe": {
+                                "id": "[variables('infraLbHttpsProbeId')]"
+                            }
+                        }
+                    },
+                    {
+                        "name": "CockpitConsole",
+                        "properties": {
+                            "frontendIPConfiguration": {
+                                "id": "[variables('infraLbFrontEndConfigId')]"
+                            },
+                            "backendAddressPool": {
+                                "id": "[variables('infraLbBackendPoolId')]"
+                            },
+                            "protocol": "Tcp",
+                            "frontendPort": 9090,
+                            "backendPort": 9090,
+                            "probe": {
+                                "id": "[variables('infraLbCockpitProbeId')]"
+                            }
+                        }
+                    }
+                ],
+                "probes": [
+                    {
+                        "name": "httpProbe",
+                        "properties": {
+                            "protocol": "Tcp",
+                            "port": 80,
+                            "intervalInSeconds": 5,
+                            "numberOfProbes": 2
+                        }
+                    },
+                    {
+                        "name": "httpsProbe",
+                        "properties": {
+                            "protocol": "Tcp",
+                            "port": 443,
+                            "intervalInSeconds": 5,
+                            "numberOfProbes": 2
+                        }
+                    },
+                    {
+                        "name": "cockpitProbe",
+                        "properties": {
+                            "protocol": "Tcp",
+                            "port": 9090,
+                            "intervalInSeconds": 5,
+                            "numberOfProbes": 2
+                        }
+                    }
+                ]
+            },
+            "dependsOn": [
+                "[concat('Microsoft.Network/publicIPAddresses/', variables('infraLbPublicIpDnsLabel'))]"
+            ]
+        },
+        {
+            "type": "Microsoft.Network/networkInterfaces",
+            "name": "[concat(variables('openshiftBastionHostname'), '-nic')]",
+            "apiVersion": "[variables('apiVersionNetwork')]",
+            "location": "[variables('location')]",
+            "tags": {
+                "displayName": "BastionNetworkInterface",
+                "provider": "[variables('redHatTags').provider]",
+                "app": "[variables('redHatTags').app]"
+            },
+            "properties": {
+                "ipConfigurations": [
+                    {
+                        "name": "[concat(variables('openshiftBastionHostname'), 'ipconfig')]",
+                        "properties": {
+                            "privateIPAllocationMethod": "Dynamic",
+                            "publicIPAddress": {
+                                "id": "[concat('/subscriptions/', subscription().subscriptionId, '/resourceGroups/', resourceGroup().name, '/providers/Microsoft.Network/publicIPAddresses/', variables('bastionPublicIp'))]"
+                            },
+                            "subnet": {
+                                "id": "[concat('/subscriptions/', subscription().subscriptionId, '/resourceGroups/', resourceGroup().name, '/providers/Microsoft.Network/virtualNetworks/', variables('virtualNetworkName'), '/subnets/', variables('masterSubnetName'))]"
+                            }
+                        }
+                    }
+                ],
+                "networkSecurityGroup": {
+                    "id": "[resourceId('Microsoft.Network/networkSecurityGroups', concat(variables('openshiftBastionHostname'), '-nsg'))]"
+                }
+            },
+            "dependsOn": [
+                "[concat('Microsoft.Network/virtualNetworks/', variables('virtualNetworkName'))]",
+                "[concat('Microsoft.Network/networkSecurityGroups/', variables('openshiftBastionHostname'), '-nsg')]"
+            ]
+        },
+        {
+            "type": "Microsoft.Network/networkInterfaces",
+            "name": "[concat(variables('openshiftMasterHostname'), '-', copyIndex(), '-nic')]",
+            "apiVersion": "[variables('apiVersionNetwork')]",
+            "location": "[variables('location')]",
+            "copy": {
+                "name": "masterNicLoop",
+                "count": "[variables('masterInstanceCount')]"
+            },
+            "tags": {
+                "displayName": "MasterNetworkInterface",
+                "provider": "[variables('redHatTags').provider]",
+                "app": "[variables('redHatTags').app]"
+            },
+            "properties": {
+                "ipConfigurations": [
+                    {
+                        "name": "[concat(variables('openshiftMasterHostname'), copyIndex(), 'ipconfig')]",
+                        "properties": {
+                            "privateIPAllocationMethod": "Dynamic",
+                            "subnet": {
+                                "id": "[concat('/subscriptions/', subscription().subscriptionId, '/resourceGroups/', resourceGroup().name, '/providers/Microsoft.Network/virtualNetworks/', variables('virtualNetworkName'), '/subnets/', variables('masterSubnetName'))]"
+                            },
+                            "loadBalancerBackendAddressPools": [
+                                {
+                                    "id": "[concat('/subscriptions/', subscription().subscriptionId, '/resourceGroups/', resourceGroup().name, '/providers/Microsoft.Network/loadBalancers/', variables('masterLoadBalancerName'), '/backendAddressPools/loadBalancerBackEnd')]"
+                                }
+                            ],
+                            "loadBalancerInboundNatRules": [
+                                {
+                                    "id": "[concat(variables('masterLbId'),'/inboundNatRules/SSH-', variables('openshiftMasterHostname'), copyIndex())]"
+                                }
+                            ]
+                        }
+                    }
+                ],
+                "networkSecurityGroup": {
+                    "id": "[resourceId('Microsoft.Network/networkSecurityGroups', concat(variables('openshiftMasterHostname'), '-nsg'))]"
+                }
+            },
+            "dependsOn": [
+                "[concat('Microsoft.Network/virtualNetworks/', variables('virtualNetworkName'))]",
+                "[concat('Microsoft.Network/loadBalancers/', variables('masterLoadBalancerName'))]",
+                "[concat(variables('masterLbId'), '/inboundNatRules/SSH-', variables('openshiftMasterHostname') ,copyIndex())]",
+                "[concat('Microsoft.Network/networkSecurityGroups/', variables('openshiftMasterHostname'), '-nsg')]"
+            ]
+        },
+        {
+            "type": "Microsoft.Network/networkInterfaces",
+            "name": "[concat(variables('openshiftInfraHostname'), '-', copyIndex(), '-nic')]",
+            "apiVersion": "[variables('apiVersionNetwork')]",
+            "location": "[variables('location')]",
+            "copy": {
+                "name": "infraNicLoop",
+                "count": "[variables('infraInstanceCount')]"
+            },
+            "tags": {
+                "displayName": "InfraNetworkInterface",
+                "provider": "[variables('redHatTags').provider]",
+                "app": "[variables('redHatTags').app]"
+            },
+            "properties": {
+                "ipConfigurations": [
+                    {
+                        "name": "[concat(variables('openshiftInfraHostname'), copyIndex(), 'ipconfig')]",
+                        "properties": {
+                            "privateIPAllocationMethod": "Dynamic",
+                            "subnet": {
+                                "id": "[concat('/subscriptions/', subscription().subscriptionId, '/resourceGroups/', resourceGroup().name, '/providers/Microsoft.Network/virtualNetworks/', variables('virtualNetworkName'), '/subnets/', variables('masterSubnetName'))]"
+                            },
+                            "loadBalancerBackendAddressPools": [
+                                {
+                                    "id": "[concat('/subscriptions/', subscription().subscriptionId, '/resourceGroups/', resourceGroup().name, '/providers/Microsoft.Network/loadBalancers/', variables('infraLoadBalancerName'), '/backendAddressPools/loadBalancerBackEnd')]"
+                                }
+                            ]
+                        }
+                    }
+                ],
+                "networkSecurityGroup": {
+                    "id": "[resourceId('Microsoft.Network/networkSecurityGroups', concat(variables('openshiftInfraHostname'), '-nsg'))]"
+                }
+            },
+            "dependsOn": [
+                "[concat('Microsoft.Network/virtualNetworks/', variables('virtualNetworkName'))]",
+                "[concat('Microsoft.Network/loadBalancers/', variables('infraLoadBalancerName'))]",
+                "[concat('Microsoft.Network/networkSecurityGroups/', variables('openshiftInfraHostname'), '-nsg')]"
+            ]
+        },
+        {
+            "type": "Microsoft.Network/networkInterfaces",
+            "name": "[concat(variables('openshiftNodeHostname'), '-', copyIndex(), '-nic')]",
+            "apiVersion": "[variables('apiVersionNetwork')]",
+            "location": "[variables('location')]",
+            "copy": {
+                "name": "nodeNicLoop",
+                "count": "[variables('nodeInstanceCount')]"
+            },
+            "tags": {
+                "displayName": "NodeNetworkInterface",
+                "provider": "[variables('redHatTags').provider]",
+                "app": "[variables('redHatTags').app]"
+            },
+            "properties": {
+                "ipConfigurations": [
+                    {
+                        "name": "[concat(variables('openshiftNodeHostname'), copyIndex(), 'ipconfig')]",
+                        "properties": {
+                            "privateIPAllocationMethod": "Dynamic",
+                            "subnet": {
+                                "id": "[concat('/subscriptions/', subscription().subscriptionId, '/resourceGroups/', resourceGroup().name, '/providers/Microsoft.Network/virtualNetworks/', variables('virtualNetworkName'), '/subnets/', variables('nodeSubnetName'))]"
+                            }
+                        }
+                    }
+                ],
+                "networkSecurityGroup": {
+                    "id": "[resourceId('Microsoft.Network/networkSecurityGroups', concat(variables('openshiftNodeHostname'), '-nsg'))]"
+                }
+            },
+            "dependsOn": [
+                "[concat('Microsoft.Network/virtualNetworks/', variables('virtualNetworkName'))]",
+                "[concat('Microsoft.Network/networkSecurityGroups/', variables('openshiftNodeHostname'), '-nsg')]"
+            ]
+        },
+        {
+            "type": "Microsoft.Resources/deployments",
+            "name": "bastionVmDeployment",
+            "apiVersion": "[variables('apiVersionLinkTemplate')]",
+            "properties": {
+                "mode": "Incremental",
+                "templateLink": {
+                    "uri": "[variables('basicDeploymentTemplateUrl')]",
+                    "contentVersion": "1.0.0.0"
+                },
+                "parameters": {
+                    "location": {
+                        "value": "[variables('location')]"
+                    },
+                    "sshKeyPath": {
+                        "value": "[variables('sshKeyPath')]"
+                    },
+                    "sshPublicKey": {
+                        "value": "[parameters('sshPublicKey')]"
+                    },
+                    "adminUsername": {
+                        "value": "[parameters('adminUsername')]"
+                    },
+                    "vmSize": {
+                        "value": "[variables('bastionVmSize')]"
+                    },
+                    "hostname": {
+                        "value": "[variables('openshiftBastionHostname')]"
+                    },
+                    "role": {
+                        "value": "bastionnode"
+                    },
+                    "newStorageAccount": {
+                        "value": "[variables('newStorageAccountBastion')]"
+                    },
+                    "diagStorageAccount": {
+                        "value": "[variables('diagStorageAccount')]"
+                    },
+                    "apiVersionStorage": {
+                        "value": "[variables('apiVersionStorage')]"
+                    },
+                    "apiVersionCompute": {
+                        "value": "[variables('apiVersionCompute')]"
+                    }
+                }
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts', variables('newStorageAccountBastion'))]",
+                "[resourceId('Microsoft.Storage/storageAccounts', variables('diagStorageAccount'))]",
+                "[concat('Microsoft.Network/networkInterfaces/', variables('openshiftBastionHostname'), '-nic')]"
+            ]
+        },
+        {
+            "type": "Microsoft.Resources/deployments",
+            "name": "[concat('masterVmDeployment', copyindex())]",
+            "apiVersion": "[variables('apiVersionLinkTemplate')]",
+            "copy": {
+                "name": "masterVmLoop",
+                "count": "[variables('masterInstanceCount')]"
+            },
+            "properties": {
+                "mode": "Incremental",
+                "templateLink": {
+                    "uri": "[variables('clusterNodeDeploymentTemplateUrl')]",
+                    "contentVersion": "1.0.0.0"
+                },
+                "parameters": {
+                    "location": {
+                        "value": "[variables('location')]"
+                    },
+                    "sshKeyPath": {
+                        "value": "[variables('sshKeyPath')]"
+                    },
+                    "sshPublicKey": {
+                        "value": "[parameters('sshPublicKey')]"
+                    },
+                    "dataDiskSize": {
+                        "value": "[variables('dataDiskSize')]"
+                    },
+                    "adminUsername": {
+                        "value": "[parameters('adminUsername')]"
+                    },
+                    "vmSize": {
+                        "value": "[variables('masterVmSize')]"
+                    },
+                    "availabilitySet": {
+                        "value": "masteravailabilityset"
+                    },
+                    "hostname": {
+                        "value": "[concat(variables('openshiftMasterHostname'), '-', copyIndex())]"
+                    },
+                    "role": {
+                        "value": "masternode"
+                    },
+                    "newStorageAccount": {
+                        "value": "[variables('newStorageAccountMaster')]"
+                    },
+                    "diagStorageAccount": {
+                        "value": "[variables('diagStorageAccount')]"
+                    },
+                    "apiVersionStorage": {
+                        "value": "[variables('apiVersionStorage')]"
+                    },
+                    "apiVersionCompute": {
+                        "value": "[variables('apiVersionCompute')]"
+                    }
+                }
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts', variables('newStorageAccountMaster'))]",
+                "[resourceId('Microsoft.Storage/storageAccounts', variables('diagStorageAccount'))]",
+                "masterNicLoop",
+                "masteravailabilityset"
+            ]
+        },
+        {
+            "type": "Microsoft.Resources/deployments",
+            "name": "[concat('infraVmDeployment', copyindex())]",
+            "apiVersion": "[variables('apiVersionLinkTemplate')]",
+            "copy": {
+                "name": "infraVmLoop",
+                "count": "[variables('infraInstanceCount')]"
+            },
+            "properties": {
+                "mode": "Incremental",
+                "templateLink": {
+                    "uri": "[variables('clusterNodeDeploymentTemplateUrl')]",
+                    "contentVersion": "1.0.0.0"
+                },
+                "parameters": {
+                    "location": {
+                        "value": "[variables('location')]"
+                    },
+                    "sshKeyPath": {
+                        "value": "[variables('sshKeyPath')]"
+                    },
+                    "sshPublicKey": {
+                        "value": "[parameters('sshPublicKey')]"
+                    },
+                    "dataDiskSize": {
+                        "value": "[variables('dataDiskSize')]"
+                    },
+                    "adminUsername": {
+                        "value": "[parameters('adminUsername')]"
+                    },
+                    "vmSize": {
+                        "value": "[variables('infraVmSize')]"
+                    },
+                    "availabilitySet": {
+                        "value": "infraavailabilityset"
+                    },
+                    "hostname": {
+                        "value": "[concat(variables('openshiftInfraHostname'), '-', copyIndex())]"
+                    },
+                    "role": {
+                        "value": "infranode"
+                    },
+                    "newStorageAccount": {
+                        "value": "[variables('newStorageAccountInfra')]"
+                    },
+                    "diagStorageAccount": {
+                        "value": "[variables('diagStorageAccount')]"
+                    },
+                    "apiVersionStorage": {
+                        "value": "[variables('apiVersionStorage')]"
+                    },
+                    "apiVersionCompute": {
+                        "value": "[variables('apiVersionCompute')]"
+                    }
+                }
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts', variables('newStorageAccountInfra'))]",
+                "[resourceId('Microsoft.Storage/storageAccounts', variables('diagStorageAccount'))]",
+                "infraNicLoop",
+                "infraavailabilityset"
+            ]
+        },
+        {
+            "type": "Microsoft.Resources/deployments",
+            "name": "[concat('nodeVmDeployment', copyindex())]",
+            "apiVersion": "[variables('apiVersionLinkTemplate')]",
+            "copy": {
+                "name": "nodeVmLoop",
+                "count": "[variables('nodeInstanceCount')]"
+            },
+            "properties": {
+                "mode": "Incremental",
+                "templateLink": {
+                    "uri": "[variables('clusterNodeDeploymentTemplateUrl')]",
+                    "contentVersion": "1.0.0.0"
+                },
+                "parameters": {
+                    "location": {
+                        "value": "[variables('location')]"
+                    },
+                    "sshKeyPath": {
+                        "value": "[variables('sshKeyPath')]"
+                    },
+                    "sshPublicKey": {
+                        "value": "[parameters('sshPublicKey')]"
+                    },
+                    "dataDiskSize": {
+                        "value": "[variables('dataDiskSize')]"
+                    },
+                    "adminUsername": {
+                        "value": "[parameters('adminUsername')]"
+                    },
+                    "vmSize": {
+                        "value": "[variables('nodeVmSize')]"
+                    },
+                    "availabilitySet": {
+                        "value": "nodeavailabilityset"
+                    },
+                    "hostname": {
+                        "value": "[concat(variables('openshiftNodeHostname'), '-', copyIndex())]"
+                    },
+                    "role": {
+                        "value": "appnode"
+                    },
+                    "newStorageAccount": {
+                        "value": "[variables('newStorageAccountNode')]"
+                    },
+                    "diagStorageAccount": {
+                        "value": "[variables('diagStorageAccount')]"
+                    },
+                    "apiVersionStorage": {
+                        "value": "[variables('apiVersionStorage')]"
+                    },
+                    "apiVersionCompute": {
+                        "value": "[variables('apiVersionCompute')]"
+                    }
+                }
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts', variables('newStorageAccountNode'))]",
+                "[resourceId('Microsoft.Storage/storageAccounts', variables('diagStorageAccount'))]",
+                "nodeNicLoop",
+                "nodeavailabilityset"
+            ]
+        },
+        {
+            "type": "Microsoft.Compute/virtualMachines/extensions",
+            "name": "[concat(variables('openshiftBastionHostname'), '/deployOpenShift')]",
+            "apiVersion": "[variables('apiVersionCompute')]",
+            "location": "[variables('location')]",
+            "tags": {
+                "displayName": "PrepBastion",
+                "provider": "[variables('redHatTags').provider]",
+                "app": "[variables('redHatTags').app]"
+            },
+            "properties": {
+                "publisher": "Microsoft.Azure.Extensions",
+                "type": "CustomScript",
+                "typeHandlerVersion": "2.0",
+                "autoUpgradeMinorVersion": true,
+                "settings": {
+                    "fileUris": [
+                        "[variables('bastionPrepScriptUrl')]"
+                    ]
+                },
+                "protectedSettings": {
+                    "commandToExecute": "[concat('bash ', variables('bastionPrepScriptFileName'), ' ', parameters('rhsmUsername'), ' ',variables('singlequote'), parameters('rhsmPassword'), variables('singlequote'), ' ', parameters('rhsmPoolId'))]"
+                }
+            },
+            "dependsOn": [
+                "bastionVmDeployment"
+            ]
+        },
+        {
+            "type": "Microsoft.Compute/virtualMachines/extensions",
+            "name": "[concat(variables('openshiftMasterHostname'), '-', copyIndex(), '/prepMasters')]",
+            "apiVersion": "[variables('apiVersionCompute')]",
+            "location": "[variables('location')]",
+            "copy": {
+                "name": "masterPrepLoop",
+                "count": "[variables('masterInstanceCount')]"
+            },
+            "tags": {
+                "displayName": "PrepMaster",
+                "provider": "[variables('redHatTags').provider]",
+                "app": "[variables('redHatTags').app]"
+            },
+            "properties": {
+                "publisher": "Microsoft.Azure.Extensions",
+                "type": "CustomScript",
+                "typeHandlerVersion": "2.0",
+                "autoUpgradeMinorVersion": true,
+                "settings": {
+                    "fileUris": [
+                        "[variables('masterPrepScriptUrl')]"
+                    ]
+                },
+                "protectedSettings": {
+                    "commandToExecute": "[concat('bash ', variables('masterPrepScriptFileName'), ' ', parameters('rhsmUsername'), ' ', variables('singlequote'), parameters('rhsmPassword'), variables('singlequote'), ' ', parameters('rhsmPoolId'), ' ', variables('newStorageAccountPersistentVolume1'), ' ', parameters('adminUsername'))]"
+                }
+            },
+            "dependsOn": [
+                "[concat('masterVmDeployment', copyindex())]"
+            ]
+        },
+        {
+            "type": "Microsoft.Compute/virtualMachines/extensions",
+            "name": "[concat(variables('openshiftInfraHostname'), '-', copyIndex(), '/prepNodes')]",
+            "apiVersion": "[variables('apiVersionCompute')]",
+            "location": "[variables('location')]",
+            "copy": {
+                "name": "infraPrepLoop",
+                "count": "[variables('infraInstanceCount')]"
+            },
+            "tags": {
+                "displayName": "PrepInfra",
+                "provider": "[variables('redHatTags').provider]",
+                "app": "[variables('redHatTags').app]"
+            },
+            "properties": {
+                "publisher": "Microsoft.Azure.Extensions",
+                "type": "CustomScript",
+                "typeHandlerVersion": "2.0",
+                "autoUpgradeMinorVersion": true,
+                "settings": {
+                    "fileUris": [
+                        "[variables('nodePrepScriptUrl')]"
+                    ]
+                },
+                "protectedSettings": {
+                    "commandToExecute": "[concat('bash ', variables('nodePrepScriptFileName'), ' ', parameters('rhsmUsername'), ' ', variables('singlequote'), parameters('rhsmPassword'), variables('singlequote'), ' ', parameters('rhsmPoolId'))]"
+                }
+            },
+            "dependsOn": [
+                "[concat('infraVmDeployment', copyindex())]"
+            ]
+        },
+        {
+            "type": "Microsoft.Compute/virtualMachines/extensions",
+            "name": "[concat(variables('openshiftNodeHostname'), '-', copyIndex(), '/prepNodes')]",
+            "apiVersion": "[variables('apiVersionCompute')]",
+            "location": "[variables('location')]",
+            "copy": {
+                "name": "nodePrepLoop",
+                "count": "[variables('nodeInstanceCount')]"
+            },
+            "tags": {
+                "displayName": "PrepNode",
+                "provider": "[variables('redHatTags').provider]",
+                "app": "[variables('redHatTags').app]"
+            },
+            "properties": {
+                "publisher": "Microsoft.Azure.Extensions",
+                "type": "CustomScript",
+                "typeHandlerVersion": "2.0",
+                "autoUpgradeMinorVersion": true,
+                "settings": {
+                    "fileUris": [
+                        "[variables('nodePrepScriptUrl')]"
+                    ]
+                },
+                "protectedSettings": {
+                    "commandToExecute": "[concat('bash ', variables('nodePrepScriptFileName'), ' ', parameters('rhsmUsername'), ' ', variables('singlequote'), parameters('rhsmPassword'), variables('singlequote'), ' ', parameters('rhsmPoolId'))]"
+                }
+            },
+            "dependsOn": [
+                "[concat('nodeVmDeployment', copyindex())]"
+            ]
+        },
+        {
+            "type": "Microsoft.Resources/deployments",
+            "name": "OpenShiftDeployment",
+            "apiVersion": "[variables('apiVersionLinkTemplate')]",
+            "properties": {
+                "mode": "Incremental",
+                "templateLink": {
+                    "uri": "[variables('openshiftDeploymentTemplateUrl')]",
+                    "contentVersion": "1.0.0.0"
+                },
+                "parameters": {
+                    "_artifactsLocation": {
+                        "value": "[parameters('baseUrl')]"
+                    },
+                    "apiVersionCompute": {
+                        "value": "[variables('apiVersionCompute')]"
+                    },
+                    "newStorageAccountRegistry": {
+                        "value": "[variables('newStorageAccountRegistry')]"
+                    },
+                    "newStorageAccountKey": {
+                        "value": "[listKeys(variables('newStorageAccountRegistry'),'2015-06-15').key1]"
+                    },
+                    "newStorageAccountPersistentVolume1": {
+                        "value": "[variables('newStorageAccountPersistentVolume1')]"
+                    },
+                    "newStorageAccountPV1Key": {
+                        "value": "[listKeys(variables('newStorageAccountPersistentVolume1'),'2015-06-15').key1]"
+                    },
+                    "openshiftBastionHostname": {
+                        "value": "[variables('openshiftBastionHostname')]"
+                    },
+                    "openshiftMasterHostname": {
+                        "value": "[variables('openshiftMasterHostname')]"
+                    },
+                    "openshiftMasterPublicIpFqdn": {
+                        "value": "[reference(variables('openshiftMasterPublicIpDnsLabel')).dnsSettings.fqdn]"
+                    },
+                    "openshiftMasterPublicIpAddress": {
+                        "value": "[reference(variables('openshiftMasterPublicIpDnsLabel')).ipAddress]"
+                    },
+                    "openshiftInfraHostname": {
+                        "value": "[variables('openshiftInfraHostname')]"
+                    },
+                    "openshiftNodeHostname": {
+                        "value": "[variables('openshiftNodeHostname')]"
+                    },
+                    "masterInstanceCount": {
+                        "value": "[variables('masterInstanceCount')]"
+                    },
+                    "infraInstanceCount": {
+                        "value": "[variables('infraInstanceCount')]"
+                    },
+                    "nodeInstanceCount": {
+                        "value": "[variables('nodeInstanceCount')]"
+                    },
+                    "adminUsername": {
+                        "value": "[parameters('adminUsername')]"
+                    },
+                    "openshiftPassword": {
+                        "value": "[parameters('openshiftPassword')]"
+                    },
+                    "enableAzure": {
+                        "value": "[parameters('enableAzure')]"
+                    },
+                    "aadClientId": {
+                        "value": "[parameters('aadClientId')]"
+                    },
+                    "aadClientSecret": {
+                        "value": "[parameters('aadClientSecret')]"
+                    },
+                    "xipioDomain": {
+                        "value": "[concat(reference(variables('infraLbPublicIpDnsLabel')).ipAddress, '.xip.io')]"
+                    },
+                    "customDomain": {
+                        "value": "[variables('defaultSubDomain')]"
+                    },
+                    "subDomainChosen": {
+                        "value": "[concat(parameters('defaultSubDomainType'), 'Domain')]"
+                    },
+                    "sshPrivateKey": {
+                        "reference": {
+                            "keyvault": {
+                                "id": "[concat('/subscriptions/', subscription().subscriptionId, '/resourceGroups/', parameters('keyVaultResourceGroup'), '/providers/Microsoft.KeyVault/vaults/', parameters('keyVaultName'))]"
+                            },
+                            "secretName": "[parameters('keyVaultSecret')]"
+                        }
+                    }
+                }
+            },
+            "dependsOn": [
+                "[concat('Microsoft.Compute/virtualMachines/', variables('openshiftBastionHostname'), '/extensions/deployOpenShift')]",
+                "masterPrepLoop",
+                "infraPrepLoop",
+                "nodePrepLoop"
+            ]
+        }
+    ],
+    "outputs": {
+        "Openshift Console Url": {
+            "type": "String",
+            "value": "[concat('https://', reference(variables('openshiftMasterPublicIpDnsLabel')).dnsSettings.fqdn, ':8443/console')]"
+        },
+        "Bastion SSH": {
+            "type": "String",
+            "value": "[concat('ssh ', reference(variables('bastionPublicIp')).dnsSettings.fqdn, ' -p 22')]"
+        },
+        "Openshift Master SSH": {
+            "type": "String",
+            "value": "[concat('ssh ', parameters('adminUsername'), '@', reference(variables('openshiftMasterPublicIpDnsLabel')).dnsSettings.fqdn, ' -p 2200')]"
+        },
+        "Openshift Infra Load Balancer FQDN": {
+            "type": "String",
+            "value": "[reference(variables('infraLbPublicIpDnsLabel')).dnsSettings.fqdn]"
+        }
+    }
+}

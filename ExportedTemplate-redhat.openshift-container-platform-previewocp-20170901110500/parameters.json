@@ -1,0 +1,57 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentParameters.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "baseUrl": {
+            "value": "https://gallery.azure.com/artifact/20151001/redhat.openshift-container-platform-previewocp.1.0.9/Artifacts"
+        },
+        "openshiftClusterPrefix": {
+            "value": "msftignite"
+        },
+        "adminUsername": {
+            "value": "ngerasim"
+        },
+        "clusterSize": {
+            "value": "large"
+        },
+        "openshiftPassword": {
+            "value": null
+        },
+        "rhsmUsername": {
+            "value": "ngerasim_ccsp"
+        },
+        "rhsmPassword": {
+            "value": null
+        },
+        "rhsmPoolId": {
+            "value": "8a85f9815a71f0bd015a7246063805c1"
+        },
+        "sshPublicKey": {
+            "value": null
+        },
+        "keyVaultResourceGroup": {
+            "value": "ngerasim-keyvault"
+        },
+        "keyVaultName": {
+            "value": "ngerasim-keyvault"
+        },
+        "keyVaultSecret": {
+            "value": "ngerasim-keyvault"
+        },
+        "enableAzure": {
+            "value": "true"
+        },
+        "aadClientId": {
+            "value": "ef57c589-3803-497e-8b03-49690e9e1eab"
+        },
+        "aadClientSecret": {
+            "value": null
+        },
+        "defaultSubDomainType": {
+            "value": "xipio"
+        },
+        "defaultSubDomain": {
+            "value": "contoso.com"
+        }
+    }
+}
