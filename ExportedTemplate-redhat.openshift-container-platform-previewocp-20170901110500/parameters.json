@@ -6,10 +6,10 @@
             "value": "https://gallery.azure.com/artifact/20151001/redhat.openshift-container-platform-previewocp.1.0.9/Artifacts"
         },
         "openshiftClusterPrefix": {
-            "value": "msftignite"
+            "value": "input value here"
         },
         "adminUsername": {
-            "value": "ngerasim"
+            "value": "input value here"
         },
         "clusterSize": {
             "value": "large"
@@ -18,31 +18,31 @@
             "value": null
         },
         "rhsmUsername": {
-            "value": "ngerasim_ccsp"
+            "value": "input value here"
         },
         "rhsmPassword": {
             "value": null
         },
         "rhsmPoolId": {
-            "value": "8a85f9815a71f0bd015a7246063805c1"
+            "value": "input value here"
         },
         "sshPublicKey": {
             "value": null
         },
         "keyVaultResourceGroup": {
-            "value": "ngerasim-keyvault"
+            "value": "input value here"
         },
         "keyVaultName": {
-            "value": "ngerasim-keyvault"
+            "value": "input value here"
         },
         "keyVaultSecret": {
-            "value": "ngerasim-keyvault"
+            "value": "input value here"
         },
         "enableAzure": {
             "value": "true"
         },
         "aadClientId": {
-            "value": "ef57c589-3803-497e-8b03-49690e9e1eab"
+            "value": "input value here"
         },
         "aadClientSecret": {
             "value": null
